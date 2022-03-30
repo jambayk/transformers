@@ -1362,7 +1362,8 @@ class Trainer:
                 # We just need to begin an iteration to create the randomization of the sampler.
                 for _ in train_dataloader:
                     break
-
+        
+        start_train_stable_time = 0
         for epoch in range(epochs_trained, num_train_epochs):
             if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                 train_dataloader.sampler.set_epoch(epoch)
@@ -1386,6 +1387,9 @@ class Trainer:
 
             step = -1
             for step, inputs in enumerate(epoch_iterator):
+
+                if (self.state.global_step == 10):
+                    start_train_stable_time = time.time()
 
                 # Skip past any already trained steps if resuming training
                 if steps_trained_in_current_epoch > 0:
@@ -1560,6 +1564,11 @@ class Trainer:
         train_loss = self._total_loss_scalar / self.state.global_step
 
         metrics = speed_metrics("train", start_time, num_samples=num_train_samples, num_steps=self.state.max_steps)
+
+        total_samples = args.max_steps*total_train_batch_size if args.max_steps > 0  else num_examples*num_train_epochs
+        perf_samples = total_samples - 10*total_train_batch_size
+        stable_train_metrics = speed_metrics("stable_train", start_train_stable_time, perf_samples)
+        
         self.store_flos()
         metrics["total_flos"] = self.state.total_flos
         metrics["train_loss"] = train_loss
@@ -1569,6 +1578,7 @@ class Trainer:
         self._memory_tracker.stop_and_update_metrics(metrics)
 
         self.log(metrics)
+        self.log(stable_train_metrics)
 
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
 
