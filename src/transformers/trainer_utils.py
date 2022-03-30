@@ -94,6 +94,7 @@ class TrainOutput(NamedTuple):
     global_step: int
     training_loss: float
     metrics: Dict[str, float]
+    stable_metrics: Dict[str, float]
 
 
 PREFIX_CHECKPOINT_DIR = "checkpoint"
