@@ -1396,10 +1396,6 @@ class Trainer:
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
 
-                train_step_metrics = speed_metrics("train_step", 
-                    start_train_step_time, self.args.per_device_train_batch_size)
-                self.log(train_step_metrics)
-
                 if self.control.should_epoch_stop or self.control.should_training_stop:
                     break
 
@@ -1473,7 +1469,7 @@ class Trainer:
 
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
 
-        return TrainOutput(self.state.global_step, train_loss, metrics)
+        return TrainOutput(self.state.global_step, train_loss, metrics, stable_train_metrics)
 
     def _load_state_dict_in_model(self, state_dict):
         load_result = self.model.load_state_dict(state_dict, strict=False)
