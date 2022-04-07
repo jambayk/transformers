@@ -248,6 +248,12 @@ class Trainer:
             containing the optimizer and the scheduler to use. Will default to an instance of
             :class:`~transformers.AdamW` on your model and a scheduler given by
             :func:`~transformers.get_linear_schedule_with_warmup` controlled by :obj:`args`.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*):
+            A function that preprocess the logits right before caching them at each evaluation step. Must take two
+            tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
+            by this function will be reflected in the predictions received by `compute_metrics`.
+
+            Note that the labels (second parameter) will be `None` if the dataset does not have them.
 
     Important attributes:
 
@@ -281,6 +287,7 @@ class Trainer:
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
     ):
         if args is None:
             output_dir = "tmp_trainer"
@@ -382,6 +389,7 @@ class Trainer:
         self.model = model
 
         self.compute_metrics = compute_metrics
+        self.preprocess_logits_for_metrics = preprocess_logits_for_metrics
         self.optimizer, self.lr_scheduler = optimizers
         if model_init is not None and (self.optimizer is not None or self.lr_scheduler is not None):
             raise RuntimeError(
