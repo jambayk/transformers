@@ -302,7 +302,7 @@ class TrainingArguments:
             Use `Deepspeed <https://github.com/microsoft/deepspeed>`__. This is an experimental feature and its API may
             evolve in the future. The value is either the location of DeepSpeed json config file (e.g.,
             ``ds_config.json``) or an already loaded json file as a :obj:`dict`"
-        ortmodule (:obj:`bool`, `optional`):
+        ort (:obj:`bool`, `optional`):
             Use `ORTModule <https://github.com/microsoft/onnxruntime>`__.
         label_smoothing_factor (:obj:`float`, `optional`, defaults to 0.0):
             The label smoothing factor to use. Zero means no label smoothing, otherwise the underlying onehot-encoded
@@ -378,6 +378,9 @@ class TrainingArguments:
             :obj:`huggingface-cli login`.
         gradient_checkpointing (:obj:`bool`, `optional`, defaults to :obj:`False`):
             If True, use gradient checkpointing to save memory at the expense of slower backward pass.
+
+        profiler_config (:obj:`dict`, `optional`):
+            Use PyTorch Profiler. The value is a dictionary with profiler configurations.
     """
 
     output_dir: str = field(
@@ -685,6 +688,13 @@ class TrainingArguments:
     mp_parameters: str = field(
         default="",
         metadata={"help": "Used by the SageMaker launcher to send mp-specific args. Ignored in Trainer"},
+    )
+
+    profiler_config: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "configuration for pytorch profiler"
+        },
     )
 
     def __post_init__(self):
