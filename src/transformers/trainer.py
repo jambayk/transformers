@@ -1749,7 +1749,8 @@ class Trainer:
         with torch.profiler.profile(
                 schedule=torch.profiler.schedule(**profiler_config["schedule"]),
                 on_trace_ready=torch.profiler.tensorboard_trace_handler(profiler_config["dir_name"]),
-                with_stack=True
+                with_stack=True,
+                profile_memory=True
             ) as profiler:
             start_train_stable_time = 0
             for epoch in range(epochs_trained, num_train_epochs):
