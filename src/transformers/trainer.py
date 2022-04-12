@@ -1285,7 +1285,7 @@ class Trainer:
                 for _ in train_dataloader:
                     break
         
-        def train_(profiler = None, steps_trained_in_current_epoch = steps_trained_in_current_epoch):
+        def train_(profiler = None):
             start_train_stable_time = 0
             for epoch in range(epochs_trained, num_train_epochs):
                 if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
