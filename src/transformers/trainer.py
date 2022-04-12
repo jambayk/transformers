@@ -1284,213 +1284,200 @@ class Trainer:
                 # We just need to begin an iteration to create the randomization of the sampler.
                 for _ in train_dataloader:
                     break
-        
-        def train_(profiler = None):
-            start_train_stable_time = 0
-            for epoch in range(epochs_trained, num_train_epochs):
-                if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
-                    train_dataloader.sampler.set_epoch(epoch)
-                elif isinstance(train_dataloader.dataset, IterableDatasetShard):
-                    train_dataloader.dataset.set_epoch(epoch)
 
-                if is_torch_tpu_available():
-                    parallel_loader = pl.ParallelLoader(train_dataloader, [args.device]).per_device_loader(args.device)
-                    epoch_iterator = parallel_loader
-                else:
-                    epoch_iterator = train_dataloader
+        start_train_stable_time = 0
+        for epoch in range(epochs_trained, num_train_epochs):
+            if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
+                train_dataloader.sampler.set_epoch(epoch)
+            elif isinstance(train_dataloader.dataset, IterableDatasetShard):
+                train_dataloader.dataset.set_epoch(epoch)
 
-                # Reset the past mems state at the beginning of each epoch if necessary.
-                if args.past_index >= 0:
-                    self._past = None
+            if is_torch_tpu_available():
+                parallel_loader = pl.ParallelLoader(train_dataloader, [args.device]).per_device_loader(args.device)
+                epoch_iterator = parallel_loader
+            else:
+                epoch_iterator = train_dataloader
 
-                steps_in_epoch = (
-                    len(epoch_iterator) if train_dataset_is_sized else args.max_steps * args.gradient_accumulation_steps
-                )
-                self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
+            # Reset the past mems state at the beginning of each epoch if necessary.
+            if args.past_index >= 0:
+                self._past = None
 
-                for step, inputs in enumerate(epoch_iterator):
-                    
-                    if (self.state.global_step == 10):
-                        start_train_stable_time = time.time()
+            steps_in_epoch = (
+                len(epoch_iterator) if train_dataset_is_sized else args.max_steps * args.gradient_accumulation_steps
+            )
+            self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
 
-                    # Skip past any already trained steps if resuming training
-                    if steps_trained_in_current_epoch > 0:
-                        steps_trained_in_current_epoch -= 1
-                        if steps_trained_progress_bar is not None:
-                            steps_trained_progress_bar.update(1)
-                        if steps_trained_in_current_epoch == 0:
-                            self._load_rng_state(resume_from_checkpoint)
-                        continue
-                    elif steps_trained_progress_bar is not None:
-                        steps_trained_progress_bar.close()
-                        steps_trained_progress_bar = None
+            for step, inputs in enumerate(epoch_iterator):
+                
+                start_train_step_time = time.time()
+                if (self.state.global_step == 10):
+                    start_train_stable_time = time.time()
 
-                    if step % args.gradient_accumulation_steps == 0:
-                        self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
+                # Skip past any already trained steps if resuming training
+                if steps_trained_in_current_epoch > 0:
+                    steps_trained_in_current_epoch -= 1
+                    if steps_trained_progress_bar is not None:
+                        steps_trained_progress_bar.update(1)
+                    if steps_trained_in_current_epoch == 0:
+                        self._load_rng_state(resume_from_checkpoint)
+                    continue
+                elif steps_trained_progress_bar is not None:
+                    steps_trained_progress_bar.close()
+                    steps_trained_progress_bar = None
 
-                    if (
-                        ((step + 1) % args.gradient_accumulation_steps != 0)
-                        and args.local_rank != -1
-                        and args._no_sync_in_gradient_accumulation
-                    ):
-                        # Avoid unnecessary DDP synchronization since there will be no backward pass on this example.
-                        with model.no_sync():
-                            tr_loss_step = self.training_step(model, inputs)
-                    else:
+                if step % args.gradient_accumulation_steps == 0:
+                    self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
+
+                if (
+                    ((step + 1) % args.gradient_accumulation_steps != 0)
+                    and args.local_rank != -1
+                    and args._no_sync_in_gradient_accumulation
+                ):
+                    # Avoid unnecessary DDP synchronization since there will be no backward pass on this example.
+                    with model.no_sync():
                         tr_loss_step = self.training_step(model, inputs)
+                else:
+                    tr_loss_step = self.training_step(model, inputs)
 
-                    if args.logging_nan_inf_filter and (torch.isnan(tr_loss_step) or torch.isinf(tr_loss_step)):
-                        # if loss is nan or inf simply add the average of previous logged losses
-                        tr_loss += tr_loss / 1 + (self.state.global_step - self._globalstep_last_logged)
-                    else:
-                        tr_loss += tr_loss_step
+                if args.logging_nan_inf_filter and (torch.isnan(tr_loss_step) or torch.isinf(tr_loss_step)):
+                    # if loss is nan or inf simply add the average of previous logged losses
+                    tr_loss += tr_loss / 1 + (self.state.global_step - self._globalstep_last_logged)
+                else:
+                    tr_loss += tr_loss_step
 
-                    self.current_flos += float(self.floating_point_ops(inputs))
+                self.current_flos += float(self.floating_point_ops(inputs))
 
-                    # Optimizer step for deepspeed must be called on every step regardless of the value of gradient_accumulation_steps
-                    if self.deepspeed:
-                        self.deepspeed.step()
+                # Optimizer step for deepspeed must be called on every step regardless of the value of gradient_accumulation_steps
+                if self.deepspeed:
+                    self.deepspeed.step()
 
-                    if (step + 1) % args.gradient_accumulation_steps == 0 or (
-                        # last step in epoch but step is always smaller than gradient_accumulation_steps
-                        steps_in_epoch <= args.gradient_accumulation_steps
-                        and (step + 1) == steps_in_epoch
-                    ):
-                        # Gradient clipping
-                        if args.max_grad_norm is not None and args.max_grad_norm > 0 and not self.deepspeed:
-                            # deepspeed does its own clipping
+                if (step + 1) % args.gradient_accumulation_steps == 0 or (
+                    # last step in epoch but step is always smaller than gradient_accumulation_steps
+                    steps_in_epoch <= args.gradient_accumulation_steps
+                    and (step + 1) == steps_in_epoch
+                ):
+                    # Gradient clipping
+                    if args.max_grad_norm is not None and args.max_grad_norm > 0 and not self.deepspeed:
+                        # deepspeed does its own clipping
 
-                            if self.use_amp:
-                                # AMP: gradients need unscaling
-                                self.scaler.unscale_(self.optimizer)
+                        if self.use_amp:
+                            # AMP: gradients need unscaling
+                            self.scaler.unscale_(self.optimizer)
 
-                            if hasattr(self.optimizer, "clip_grad_norm"):
-                                # Some optimizers (like the sharded optimizer) have a specific way to do gradient clipping
-                                self.optimizer.clip_grad_norm(args.max_grad_norm)
-                            elif hasattr(model, "clip_grad_norm_"):
-                                # Some models (like FullyShardedDDP) have a specific way to do gradient clipping
-                                model.clip_grad_norm_(args.max_grad_norm)
-                            else:
-                                # Revert to normal clipping otherwise, handling Apex or full precision
-                                nn.utils.clip_grad_norm_(
-                                    amp.master_params(self.optimizer) if self.use_apex else model.parameters(),
-                                    args.max_grad_norm,
-                                )
-
-                        # Optimizer step
-                        optimizer_was_run = True
-                        if self.deepspeed:
-                            pass  # called outside the loop
-                        elif is_torch_tpu_available():
-                            xm.optimizer_step(self.optimizer)
-                        elif self.use_amp:
-                            scale_before = self.scaler.get_scale()
-                            self.scaler.step(self.optimizer)
-                            self.scaler.update()
-                            scale_after = self.scaler.get_scale()
-                            optimizer_was_run = scale_before <= scale_after
+                        if hasattr(self.optimizer, "clip_grad_norm"):
+                            # Some optimizers (like the sharded optimizer) have a specific way to do gradient clipping
+                            self.optimizer.clip_grad_norm(args.max_grad_norm)
+                        elif hasattr(model, "clip_grad_norm_"):
+                            # Some models (like FullyShardedDDP) have a specific way to do gradient clipping
+                            model.clip_grad_norm_(args.max_grad_norm)
                         else:
-                            self.optimizer.step()
+                            # Revert to normal clipping otherwise, handling Apex or full precision
+                            nn.utils.clip_grad_norm_(
+                                amp.master_params(self.optimizer) if self.use_apex else model.parameters(),
+                                args.max_grad_norm,
+                            )
 
-                        if optimizer_was_run and not self.deepspeed:
-                            self.lr_scheduler.step()
-
-                        model.zero_grad()
-                        self.state.global_step += 1
-                        self.state.epoch = epoch + (step + 1) / steps_in_epoch
-                        self.control = self.callback_handler.on_step_end(args, self.state, self.control)
-
-                        self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+                    # Optimizer step
+                    optimizer_was_run = True
+                    if self.deepspeed:
+                        pass  # called outside the loop
+                    elif is_torch_tpu_available():
+                        xm.optimizer_step(self.optimizer)
+                    elif self.use_amp:
+                        scale_before = self.scaler.get_scale()
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                        scale_after = self.scaler.get_scale()
+                        optimizer_was_run = scale_before <= scale_after
                     else:
-                        self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
+                        self.optimizer.step()
 
-                    if profiler is not None:
-                        profiler.step()
+                    if optimizer_was_run and not self.deepspeed:
+                        self.lr_scheduler.step()
 
-                    if self.control.should_epoch_stop or self.control.should_training_stop:
-                        break
+                    model.zero_grad()
+                    self.state.global_step += 1
+                    self.state.epoch = epoch + (step + 1) / steps_in_epoch
+                    self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
-                self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
-                self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+                    self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+                else:
+                    self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
 
-                if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
-                    if is_torch_tpu_available():
-                        # tpu-comment: Logging debug metrics for PyTorch/XLA (compile, execute times, ops, etc.)
-                        xm.master_print(met.metrics_report())
-                    else:
-                        logger.warning(
-                            "You enabled PyTorch/XLA debug metrics but you don't have a TPU "
-                            "configured. Check your training configuration if this is unexpected."
-                        )
-                if self.control.should_training_stop:
+                if self.control.should_epoch_stop or self.control.should_training_stop:
                     break
 
-            if args.past_index and hasattr(self, "_past"):
-                # Clean the state at the end of training
-                delattr(self, "_past")
+            self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
+            self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
 
-            logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
-            if args.load_best_model_at_end and self.state.best_model_checkpoint is not None:
-                # Wait for everyone to get here so we are sur the model has been saved by process 0.
+            if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
                 if is_torch_tpu_available():
-                    xm.rendezvous("load_best_model_at_end")
-                elif args.local_rank != -1:
-                    dist.barrier()
+                    # tpu-comment: Logging debug metrics for PyTorch/XLA (compile, execute times, ops, etc.)
+                    xm.master_print(met.metrics_report())
+                else:
+                    logger.warning(
+                        "You enabled PyTorch/XLA debug metrics but you don't have a TPU "
+                        "configured. Check your training configuration if this is unexpected."
+                    )
+            if self.control.should_training_stop:
+                break
 
-                logger.info(
-                    f"Loading best model from {self.state.best_model_checkpoint} (score: {self.state.best_metric})."
+        if args.past_index and hasattr(self, "_past"):
+            # Clean the state at the end of training
+            delattr(self, "_past")
+
+        logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
+        if args.load_best_model_at_end and self.state.best_model_checkpoint is not None:
+            # Wait for everyone to get here so we are sur the model has been saved by process 0.
+            if is_torch_tpu_available():
+                xm.rendezvous("load_best_model_at_end")
+            elif args.local_rank != -1:
+                dist.barrier()
+
+            logger.info(
+                f"Loading best model from {self.state.best_model_checkpoint} (score: {self.state.best_metric})."
+            )
+
+            best_model_path = os.path.join(self.state.best_model_checkpoint, WEIGHTS_NAME)
+            if os.path.exists(best_model_path):
+                # We load the model state dict on the CPU to avoid an OOM error.
+                state_dict = torch.load(best_model_path, map_location="cpu")
+                # If the model is on the GPU, it still works!
+                self._load_state_dict_in_model(state_dict)
+            else:
+                logger.warn(
+                    f"Could not locate the best model at {best_model_path}, if you are running a distributed training "
+                    "on multiple nodes, you should activate `--save_on_each_node`."
                 )
 
-                best_model_path = os.path.join(self.state.best_model_checkpoint, WEIGHTS_NAME)
-                if os.path.exists(best_model_path):
-                    # We load the model state dict on the CPU to avoid an OOM error.
-                    state_dict = torch.load(best_model_path, map_location="cpu")
-                    # If the model is on the GPU, it still works!
-                    self._load_state_dict_in_model(state_dict)
-                else:
-                    logger.warn(
-                        f"Could not locate the best model at {best_model_path}, if you are running a distributed training "
-                        "on multiple nodes, you should activate `--save_on_each_node`."
-                    )
+            if self.deepspeed:
+                self.deepspeed.load_checkpoint(
+                    self.state.best_model_checkpoint, load_optimizer_states=False, load_lr_scheduler_states=False
+                )
 
-                if self.deepspeed:
-                    self.deepspeed.load_checkpoint(
-                        self.state.best_model_checkpoint, load_optimizer_states=False, load_lr_scheduler_states=False
-                    )
+        # add remaining tr_loss
+        self._total_loss_scalar += tr_loss.item()
+        train_loss = self._total_loss_scalar / self.state.global_step
 
-            # add remaining tr_loss
-            self._total_loss_scalar += tr_loss.item()
-            train_loss = self._total_loss_scalar / self.state.global_step
+        metrics = speed_metrics("train", start_time, num_samples=num_train_samples, num_steps=self.state.max_steps)
+        total_samples = args.max_steps*total_train_batch_size if args.max_steps > 0  else num_examples*num_train_epochs
+        perf_samples = total_samples - 10*total_train_batch_size
+        stable_train_metrics = speed_metrics("stable_train", start_train_stable_time, perf_samples)
 
-            metrics = speed_metrics("train", start_time, num_samples=num_train_samples, num_steps=self.state.max_steps)
-            total_samples = args.max_steps*total_train_batch_size if args.max_steps > 0  else num_examples*num_train_epochs
-            perf_samples = total_samples - 10*total_train_batch_size
-            stable_train_metrics = speed_metrics("stable_train", start_train_stable_time, perf_samples)
+        self.store_flos()
+        metrics["total_flos"] = self.state.total_flos
+        metrics["train_loss"] = train_loss
 
-            self.store_flos()
-            metrics["total_flos"] = self.state.total_flos
-            metrics["train_loss"] = train_loss
+        self.is_in_train = False
 
-            self.is_in_train = False
+        self._memory_tracker.stop_and_update_metrics(metrics)
 
-            self._memory_tracker.stop_and_update_metrics(metrics)
+        self.log(metrics)
+        self.log(stable_train_metrics)
 
-            self.log(metrics)
-            self.log(stable_train_metrics)
+        self.control = self.callback_handler.on_train_end(args, self.state, self.control)
 
-            self.control = self.callback_handler.on_train_end(args, self.state, self.control)
-
-            return TrainOutput(self.state.global_step, train_loss, metrics, stable_train_metrics)
-        
-        if args.profiler_config is None:
-            return train_()
-        else:
-            with torch.profiler.profile(
-                schedule=torch.profiler.schedule(**args.profiler_config["schedule"]),
-                on_trace_ready=torch.profiler.tensorboard_trace_handler(args.profiler_config["dir_name"]),
-                with_stack=True
-            ) as profiler:
-                return train_(profiler)
+        return TrainOutput(self.state.global_step, train_loss, metrics, stable_train_metrics)
 
     def _load_state_dict_in_model(self, state_dict):
         load_result = self.model.load_state_dict(state_dict, strict=False)
